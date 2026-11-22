@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableComHosting>true</EnableComHosting>
+    <EnableRegFreeCom>true</EnableRegFreeCom>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PixelThumbs.Core/PixelThumbs.Core.csproj" />
+  </ItemGroup>
+  <Target Name="CopyUpdatedComHost" AfterTargets="_ComputeNETCoreBuildOutputFiles"
+          Condition="'$(ComHostIntermediatePath)' != ''">
+    <!-- The SDK host keeps its original timestamp even when the embedded class map changes. -->
+    <ItemGroup>
+      <None Update="$(ComHostIntermediatePath)" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always" />
+    </ItemGroup>
+  </Target>
+</Project>

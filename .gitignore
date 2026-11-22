@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+dist/
+.verification/
+artifacts/
+vendor/f3d/
+.vs/
+*.suo
+*.user

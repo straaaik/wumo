@@ -1,0 +1,15 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Lucide icons from the same package as 3D Labs. -->
+    <Geometry x:Key="LayersIcon">M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12 M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17</Geometry>
+    <Geometry x:Key="SearchIcon">m21 21-4.34-4.34 M3,11 a8,8 0 1 0 16,0 a8,8 0 1 0 -16,0 z</Geometry>
+    <Geometry x:Key="FolderIcon">m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2</Geometry>
+    <Geometry x:Key="ImageIcon">M5,3 H19 Q21,3 21,5 V19 Q21,21 19,21 H5 Q3,21 3,19 V5 Q3,3 5,3 Z M7,9 a2,2 0 1 0 4,0 a2,2 0 1 0 -4,0 z m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21</Geometry>
+    <Geometry x:Key="RotateIcon">M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5</Geometry>
+    <Geometry x:Key="CheckIcon">M20 6 9 17l-5-5</Geometry>
+    <Geometry x:Key="KeyboardIcon">M10 8h.01 M12 12h.01 M14 8h.01 M16 12h.01 M18 8h.01 M6 8h.01 M7 16h10 M8 12h.01 M4,4 H20 Q22,4 22,6 V18 Q22,20 20,20 H4 Q2,20 2,18 V6 Q2,4 4,4 Z</Geometry>
+    <Geometry x:Key="PowerIcon">M12 2v10 M18.4 6.6a9 9 0 1 1-12.77.04</Geometry>
+    <Geometry x:Key="PanelIcon">M3 5 H21 V19 H3 Z M15 5 V19 M17.5 9 H18.5</Geometry>
+    <Geometry x:Key="ModelIcon">M12 2 L21 7 V17 L12 22 L3 17 V7 Z M3 7 L12 12 L21 7 M12 12 V22</Geometry>
+    <Geometry x:Key="SettingsIcon">M14 17H5 M19 7h-9 M14,17 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z M4,7 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z</Geometry>
+    <Geometry x:Key="GearIcon">M10 2h4l.65 2.75 1.85 1.07 2.73-.8 2 3.46-2.07 1.95v2.14l2.07 1.95-2 3.46-2.73-.8-1.85 1.07L14 21h-4l-.65-2.75-1.85-1.07-2.73.8-2-3.46 2.07-1.95v-2.14L2.77 8.48l2-3.46 2.73.8 1.85-1.07L10 2z M12,8.5 a3,3 0 1 0 0,6 a3,3 0 1 0 0,-6 z</Geometry>
+</ResourceDictionary>

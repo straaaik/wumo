@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>PixelThumbs</AssemblyName>
+    <AssemblyTitle>Wumo</AssemblyTitle>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
+    <PixelThumbsBuildId Condition="'$(PixelThumbsBuildId)' == ''">$([System.DateTime]::UtcNow.Ticks)</PixelThumbsBuildId>
+    <InformationalVersion>$(Version)+pt.$(PixelThumbsBuildId)</InformationalVersion>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The WPF window and WinForms tray share the process, so DPI awareness is established before either UI stack starts. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <ApplicationIcon>pixelthumbs.ico</ApplicationIcon>
+    <BundledF3dDirectory>$(MSBuildThisFileDirectory)../../vendor/f3d</BundledF3dDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PixelThumbs.Core/PixelThumbs.Core.csproj" />
+    <ProjectReference Include="../PixelThumbs.Shell/PixelThumbs.Shell.csproj" ReferenceOutputAssembly="false" />
+    <EmbeddedResource Include="pixelthumbs.ico" LogicalName="PixelThumbs.AppIcon" />
+    <InternalsVisibleTo Include="PixelThumbs.Registration.Tests" />
+    <InternalsVisibleTo Include="PixelThumbs.ClipboardChecks" />
+    <Content Include="$(BundledF3dDirectory)/bin/**/*;$(BundledF3dDirectory)/share/**/*"
+             Exclude="$(BundledF3dDirectory)/bin/F3DShellExtension.dll;$(BundledF3dDirectory)/bin/f3d-console.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest">
+      <Link>f3d/$([MSBuild]::MakeRelative('$(BundledF3dDirectory)', '%(FullPath)'))</Link>
+    </Content>
+    <Content Include="native/*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="fonts/JetBrainsMono-Variable.ttf" LogicalName="PixelThumbs.Fonts.JetBrainsMono-Variable.ttf" />
+    <Resource Include="fonts/*.ttf" />
+    <Content Include="Ui/Lucide-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="fonts/*.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../PixelThumbs.Shell/bin/$(Configuration)/$(TargetFramework)/PixelThumbs.Shell.dll;../PixelThumbs.Shell/bin/$(Configuration)/$(TargetFramework)/PixelThumbs.Shell.runtimeconfig.json;../PixelThumbs.Shell/bin/$(Configuration)/$(TargetFramework)/PixelThumbs.Shell.deps.json"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CheckBundledF3d" BeforeTargets="PrepareForPublish">
+    <Error Condition="!Exists('$(BundledF3dDirectory)/bin/f3d.exe') Or !Exists('$(BundledF3dDirectory)/bin/f3d.dll') Or !Exists('$(BundledF3dDirectory)/bin/osmesa.dll')"
+           Text="The F3D runtime is missing. Run scripts/Install-BundledF3d.ps1 before publishing." />
+  </Target>
+</Project>

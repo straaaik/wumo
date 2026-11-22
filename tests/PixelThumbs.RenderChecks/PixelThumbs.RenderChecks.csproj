@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(PixelThumbsLegacyWorker)' == 'true'">
+    <DefineConstants>$(DefineConstants);LEGACY_WORKER</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PixelThumbsPackage)' == ''">
+    <ProjectReference Include="../../src/PixelThumbs.Core/PixelThumbs.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PixelThumbsPackage)' != ''">
+    <Reference Include="PixelThumbs.Core" HintPath="$(PixelThumbsPackage)/PixelThumbs.Core.dll" />
+    <None Include="$(PixelThumbsPackage)/PixelThumbs.exe;$(PixelThumbsPackage)/PixelThumbs.dll;$(PixelThumbsPackage)/PixelThumbs.deps.json;$(PixelThumbsPackage)/PixelThumbs.runtimeconfig.json" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+</Project>
