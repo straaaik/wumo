@@ -104,6 +104,7 @@ internal static class ConsoleDialog
             Grid.SetRow(footer, 2);
             layout.Children.Add(footer);
             Content = new Border { Background = Ink("Canvas"), BorderBrush = Ink("Frame"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Child = layout };
+            Loaded += (_, _) => UiMotion.Reveal(layout, offset: 4);
         }
 
         public StackPanel Body { get; }

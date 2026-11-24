@@ -39,6 +39,7 @@ internal static class NativeChecks
                 {
                     File.Delete(Path.Combine(profile, "settings.json"));
                     File.Delete(Path.Combine(profile, "clipboard-history.dat"));
+                    File.Delete(Path.Combine(profile, "clipboard-favorites.dat"));
                     Directory.Delete(profile);
                 }
             });
@@ -183,7 +184,11 @@ internal static class NativeChecks
         categories.SelectedIndex = (int)ShelfFilter.Links;
         await Until(() => Cards(shelf).Any(card => HasText(card, "example.invalid") && HasText(card, "https://example.invalid/page")));
         Require(Rows(shelf).Items.Count == 1 && count.Text == "1", "link filter and category count");
-        search.Text = "missing";
+        search.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0,
+            System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.PreviewMouseDownEvent });
+        Require(search.IsKeyboardFocused, "clicking the passive shelf search gives the text box keyboard focus");
+        QueueText(handle, "нет");
+        await Until(() => search.Text == "нет", "the WinForms message loop delivers character input to the WPF search");
         await Until(() => Rows(shelf).Items.Count == 0);
         Require(count.Text == "1", "search does not replace the category total");
         search.Text = "PAGE";
@@ -302,7 +307,153 @@ internal static class NativeChecks
         try { Require(remainingContent.tymed == TYMED.TYMED_ISTREAM, "restored OLE content remains usable while history is disabled"); }
         finally { ReleaseStgMedium(ref remainingContent); }
         await Until(() => !File.Exists(dataFile));
+        await CheckFavorites(dispatcher, enabled);
         Console.WriteLine("Native clipboard, hover, filters, search, inbound files/text, scoped clear, formatted text, OLE, image restore and encrypted history passed.");
+    }
+
+    private static async Task CheckFavorites(Control dispatcher, ClipboardHistoryOptions enabled)
+    {
+        string favoritesFile = Path.Combine(SettingsStore.DataDirectory, "clipboard-favorites.dat");
+        var journal = new HistoryJournal(favoritesFile);
+        var oldTime = DateTime.UtcNow.AddHours(-8);
+        var savedText = new HistoryEntry(ClipboardCapture.FromDrop(new([], "original text"))!, oldTime, Name: "Имя записи");
+        var savedImage = new ClipboardItem(ClipboardKind.Image, "archive-image", "Архивное изображение", [], [], null, null, false, null);
+        var folder = new HistoryFolder(Guid.NewGuid(), "Архивная папка", oldTime, [new(savedImage, oldTime), savedText]);
+        var extra = new HistoryEntry(ClipboardCapture.FromDrop(new([], "saved to delete"))!, oldTime, Name: "Лишняя запись");
+        var child = new HistoryEntry(ClipboardCapture.FromDrop(new([], "folder content"))!, oldTime);
+        var extraFolder = new HistoryFolder(Guid.NewGuid(), "Лишняя папка", oldTime, [child]);
+        journal.SaveFavorites(new([extra], [folder, extraFolder]));
+        var ordinaryJournal = new HistoryJournal(Path.Combine(SettingsStore.DataDirectory, "clipboard-history.dat"));
+        const string expiredText = "expired ordinary entry";
+        ordinaryJournal.Save([new(ClipboardCapture.FromDrop(new([], expiredText))!, oldTime)]);
+
+        using (var widget = new HistoryWidget(dispatcher))
+        {
+            widget.Configure(enabled with { ExpireHours = 6, KeepBetweenSessions = true });
+            var shelf = Shelf()!;
+            shelf.Open();
+            await Until(() => Cards(shelf).Any(card => CardName(card) == folder.Name));
+            var categories = (System.Windows.Controls.ListBox)shelf.FindName("Categories");
+            categories.SelectedIndex = (int)ShelfFilter.Favorites;
+            await Until(() => Cards(shelf).Count() == 3, "show all three favorites after applying expiry");
+            await Until(() => ordinaryJournal.Load().All(entry => entry.Item.TextPreview != expiredText),
+                "remove the expired entry from the journal");
+            Require(FindCard(shelf, extra.Name!) is not null && FindCard(shelf, folder.Name) is not null,
+                "six-hour expiry removes ordinary history and preserves old favorites and folders");
+            await EditName(shelf, CardNameField(shelf, folder.Name), "Мои материалы", save: true);
+            await Until(() => FindCard(shelf, "Мои материалы") is not null);
+            InvokeCard(FindCard(shelf, "Мои материалы")!, 0);
+            await Until(() => Cards(shelf).Any(card => CardName(card) == "Имя записи"));
+            var header = (System.Windows.Controls.TextBox)shelf.FindName("FolderTitle");
+            Require(Cards(shelf).Count() == 2 && header.Text == "Мои материалы",
+                "an expired folder shows the original image and renamed text in Favorites");
+            await EditName(shelf, header, "Название на отмену", save: false);
+            Require(header.Text == "Мои материалы" && shelf.IsExpanded, "Escape cancels the inline edit and leaves the folder open");
+            CardButton(Cards(shelf).Single(card => CardName(card) == "Имя записи"), "PinCard").RaiseEvent(
+                new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            await Until(() => Cards(shelf).Count() == 1);
+            categories.SelectedIndex = (int)ShelfFilter.All;
+            Require(shelf.AcceptDrop(new System.Windows.DataObject(System.Windows.DataFormats.UnicodeText, "delete me")), "post a regular entry");
+            await Until(() => Cards(shelf).Any(card => CardName(card) == "delete me"));
+            CardButton(Cards(shelf).Single(card => CardName(card) == "delete me"), "RemoveCard").RaiseEvent(
+                new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            await Until(() => Cards(shelf).All(card => CardName(card) != "delete me"));
+            Require(shelf.AcceptDrop(new System.Windows.DataObject(System.Windows.DataFormats.UnicodeText, "clear me")), "post before clearing history");
+            await Until(() => Cards(shelf).Any(card => CardName(card) == "clear me"));
+            using var tray = new ContextMenuStrip();
+            widget.PopulateTray(tray.Items);
+            tray.Items[1].PerformClick();
+            await Until(() => Cards(shelf).All(card => CardName(card) != "clear me"));
+            categories.SelectedIndex = (int)ShelfFilter.Favorites;
+            await Until(() => Cards(shelf).Count() == 4);
+            await EditName(shelf, CardNameField(shelf, "Имя записи"), "Любимый текст", save: true);
+            await Until(() => FindCard(shelf, "Любимый текст") is not null);
+            CardButton(FindCard(shelf, extra.Name!)!, "RemoveCard").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            await Until(() => Cards(shelf).Count() == 3 && FindCard(shelf, extra.Name!) is null);
+            var confirm = shelf.Dispatcher.InvokeAsync(() =>
+            {
+                var dialog = System.Windows.Application.Current.Windows.OfType<Window>().Single(window => window.Owner == shelf);
+                var button = FindVisual<System.Windows.Controls.Button>(dialog, control => Equals(control.Content, "Удалить"));
+                if (button is null)
+                    dialog.Close();
+                Require(button is not null, "folder removal confirmation presents a Delete button");
+                button!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            CardButton(FindCard(shelf, extraFolder.Name)!, "RemoveCard").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            await confirm.Task;
+            await Until(() => Cards(shelf).Count() == 2 && FindCard(shelf, extraFolder.Name) is null);
+            widget.Configure(enabled with { Enabled = false });
+        }
+
+        var stored = journal.LoadFavorites();
+        Require(stored.Entries.Single().Name == "Любимый текст" && stored.Folders.Single().Entries.Length == 1 &&
+            stored.Folders.Single().Id == folder.Id && stored.Folders.Single().Name == "Мои материалы",
+            "inline names and manual deletions are saved, and the other favorites survive history cleanup and disabling the widget");
+        Require(!Encoding.UTF8.GetString(File.ReadAllBytes(favoritesFile)).Contains("Мои материалы", StringComparison.Ordinal),
+            "folder names are encrypted");
+        await CheckGrouping(enabled);
+        Console.WriteLine("Favorite persistence, folder navigation, individual card actions and mixed grouping passed.");
+    }
+
+    private static async Task EditName(ClipboardShelf shelf, System.Windows.Controls.TextBox field, string name, bool save)
+    {
+        field.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0,
+            System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.PreviewMouseDownEvent });
+        Require(!field.IsReadOnly && field.IsKeyboardFocused && field.SelectedText == field.Text,
+            "clicking a title opens an inline editor with the current name selected");
+        Require(!System.Windows.Application.Current.Windows.OfType<Window>().Any(window => window.Owner == shelf),
+            "inline rename opens no dialog");
+        nint handle = PanelPlacement.Handle(shelf);
+        QueueText(handle, name);
+        await Until(() => field.Text == name, "the inline title editor receives Windows keyboard input");
+        if (Environment.GetEnvironmentVariable("WUMO_SHELF_SNAPSHOT") is { Length: > 0 } path && field.Name == "FolderTitle")
+            SaveShelfSnapshot(shelf, Path.Combine(Path.GetDirectoryName(path)!, "wumo-shelf-inline-name.png"));
+        NativeRequire(PostMessage(handle, 0x0100, save ? 0x0d : 0x1b, 1), "queue Enter or Escape for the inline editor");
+        await Until(() => field.IsReadOnly, "Enter or Escape closes the inline editor");
+    }
+
+    private static void QueueText(nint handle, string value)
+    {
+        foreach (char character in value)
+            NativeRequire(PostMessage(handle, 0x0102, character, 1), "queue a Windows character message for the focused field");
+    }
+
+    private static async Task CheckGrouping(ClipboardHistoryOptions enabled)
+    {
+        var history = new HistoryStore();
+        var now = DateTime.UtcNow;
+        var one = history.Add(ClipboardCapture.FromDrop(new([], "one"))!, now);
+        var two = history.Add(new ClipboardItem(ClipboardKind.Image, "test-image", "two", [], [], null, null, false, null), now);
+        var three = history.Add(new ClipboardItem(ClipboardKind.Files, "test-file", "three", [], [], null, null, false, null), now);
+        var shelf = new ClipboardShelf();
+        try
+        {
+            shelf.Configure(enabled);
+            shelf.SetEntries(history.Entries, history.Favorites, history.Folders);
+            shelf.Group += (source, target, folder) => folder is { } id ? history.AddToFolder(source, id) : history.Group(source, target!);
+            shelf.Open();
+            await Until(() => shelf.Expansion == 1 && Cards(shelf).Count() == 3);
+            shelf.SetDragSource(one);
+            var drop = new System.Windows.DataObject(new ClipboardTransfer(one.Item, dragging: true, fromShelf: true));
+            Require(!shelf.AcceptGroupDrop(drop, Center("one")) && shelf.AcceptGroupDrop(drop, Center("two")), "drag from one card to another");
+            shelf.SetEntries(history.Entries, history.Favorites, history.Folders);
+            await Until(() => Cards(shelf).Any(card => CardName(card) == "Новая папка"));
+            shelf.SetDragSource(three);
+            drop = new System.Windows.DataObject(new ClipboardTransfer(three.Item, dragging: true, fromShelf: true));
+            Require(shelf.AcceptGroupDrop(drop, Center("Новая папка")) && history.Folders.Single().Entries.Length == 3,
+                "drag a file into the folder with text and an image");
+            shelf.SetEntries(history.Entries, history.Favorites, history.Folders);
+            await Until(() => Cards(shelf).Count() == 1);
+            InvokeCard(Cards(shelf).Single(), 0);
+            await Until(() => Cards(shelf).Count() == 3);
+        }
+        finally { shelf.Close(); }
+
+        System.Windows.Point Center(string name)
+        {
+            var card = Cards(shelf).Single(card => CardName(card) == name);
+            return card.TranslatePoint(new System.Windows.Point(card.ActualWidth / 2, card.ActualHeight / 2), Rows(shelf));
+        }
     }
 
     private static async Task CheckLayouts(HistoryWidget widget, ClipboardHistoryOptions enabled, ClipboardShelf shelf, nint handle)
@@ -331,23 +482,27 @@ internal static class NativeChecks
             var filters = (System.Windows.Controls.ListBox)shelf.FindName("Categories");
             var toolbar = (FrameworkElement)shelf.FindName("Toolbar");
             Require(Math.Abs(field.TranslatePoint(new System.Windows.Point(field.ActualWidth / 2, 0), toolbar).X -
-                toolbar.ActualWidth / 2) <= 1 && filters.Items.Count == 6 &&
+                toolbar.ActualWidth / 2) <= 1 && filters.Items.Count == 7 && shelf.FindName("CloseShelf") is null &&
                 filters.ItemContainerGenerator.ContainerFromIndex(3) is System.Windows.Controls.ListBoxItem
                 { ToolTip: "Изображения" }, "search is centered and all icon filters are labelled");
             if (Environment.GetEnvironmentVariable("WUMO_SHELF_SNAPSHOT") is { Length: > 0 } path)
-            {
-                var png = new PngBitmapEncoder();
-                png.Frames.Add(BitmapFrame.Create(RenderShelf(shelf)));
-                using var file = File.Create(Path.Combine(Path.GetDirectoryName(path)!, $"wumo-shelf-{edge.ToString().ToLowerInvariant()}.png"));
-                png.Save(file);
-            }
-            ((System.Windows.Controls.Button)shelf.FindName("CloseShelf")).RaiseEvent(
-                new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+                SaveShelfSnapshot(shelf, Path.Combine(Path.GetDirectoryName(path)!, $"wumo-shelf-{edge.ToString().ToLowerInvariant()}.png"));
+            shelf.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(shelf), 0, System.Windows.Input.Key.Escape)
+            { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
             await Until(() => !shelf.IsExpanded && shelf.Expansion == 0 && shelf.IsVisible);
         }
         shelf.Open();
         await Until(() => shelf.Expansion == 1);
         Console.WriteLine("Centered showcase, icon filters and the same shelf HWND verified across all four edges.");
+    }
+
+    private static void SaveShelfSnapshot(ClipboardShelf shelf, string path)
+    {
+        var png = new PngBitmapEncoder();
+        png.Frames.Add(BitmapFrame.Create(RenderShelf(shelf)));
+        using var file = File.Create(path);
+        png.Save(file);
     }
 
     private static RenderTargetBitmap RenderShelf(ClipboardShelf shelf)
@@ -368,13 +523,12 @@ internal static class NativeChecks
             window.ClipboardOptionsSaved += _ => clipboardChanges++;
             window.Saved += (_, _) => throw new InvalidOperationException("clipboard invoked thumbnail settings apply");
             window.Show();
-            var tab = (System.Windows.Controls.RadioButton)window.FindName("ClipboardChoice");
+            var tab = (WidgetChoice)window.FindName("ClipboardChoice");
             tab.IsChecked = true;
             Require(((System.Windows.Controls.ScrollViewer)window.FindName("ClipboardPage")).Visibility == Visibility.Visible, "widget page");
-            var toggle = (System.Windows.Controls.CheckBox)window.FindName("ClipboardSwitch");
-            Require(toggle.IsChecked == false, "widget defaults off");
-            toggle.IsChecked = true;
-            toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            Require(!tab.WidgetEnabled, "widget defaults off");
+            tab.BeginGesture(new System.Windows.Point(40, 20));
+            Require(tab.EndGesture(new System.Windows.Point(90, 20)), "widget handles a right swipe");
             var after = SettingsStore.Load();
             Require(clipboardChanges == 1 && after.ClipboardHistory == enabled &&
                 !after.ThumbnailsWidgetEnabled && after.QuickPreviewSize == 768, "live settings independent of 3D");
@@ -402,6 +556,13 @@ internal static class NativeChecks
     private static string CardName(System.Windows.Controls.Border card) =>
         System.Windows.Automation.AutomationProperties.GetName(card);
 
+    private static System.Windows.Controls.Border? FindCard(ClipboardShelf shelf, string name) =>
+        Cards(shelf).SingleOrDefault(card => CardName(card) == name);
+
+    private static System.Windows.Controls.TextBox CardNameField(ClipboardShelf shelf, string name) =>
+        FindVisual<System.Windows.Controls.TextBox>(FindCard(shelf, name)!, field => field.Name == "EntryText") ??
+        throw new InvalidOperationException($"Missing inline editor for {name}");
+
     private static bool HasText(DependencyObject root, string expected)
     {
         if (root is System.Windows.Controls.TextBlock { IsVisible: true } text && text.Text.StartsWith(expected, StringComparison.Ordinal))
@@ -416,15 +577,29 @@ internal static class NativeChecks
         ((System.Windows.Controls.MenuItem)card.ContextMenu.Items[command]).RaiseEvent(
             new RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));
 
+    private static System.Windows.Controls.Button CardButton(DependencyObject root, string name) =>
+        FindVisual<System.Windows.Controls.Button>(root, button => button.Name == name) ??
+        throw new InvalidOperationException($"Missing {name} button");
+
+    private static T? FindVisual<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject
+    {
+        if (root is T element && match(element))
+            return element;
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+            if (FindVisual(VisualTreeHelper.GetChild(root, index), match) is { } child)
+                return child;
+        return null;
+    }
+
     private static ClipboardShelf? Shelf() => System.Windows.Application.Current.Windows.OfType<ClipboardShelf>().LastOrDefault();
     private static System.Windows.Controls.ListBox Rows(ClipboardShelf shelf) =>
         (System.Windows.Controls.ListBox)shelf.FindName("Entries");
-    private static async Task Until(Func<bool> complete)
+    private static async Task Until(Func<bool> complete, string operation = "wait for clipboard update")
     {
         var timeout = Stopwatch.StartNew();
         while (!complete())
         {
-            Require(timeout.Elapsed < TimeSpan.FromSeconds(5), "wait for clipboard update");
+            Require(timeout.Elapsed < TimeSpan.FromSeconds(5), operation);
             await Task.Delay(15);
         }
     }
@@ -522,6 +697,8 @@ internal static class NativeChecks
     private static extern nint CreateWindowStation(string name, uint flags, uint access, nint attributes);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessWindowStation(nint station);
     [DllImport("user32.dll")] private static extern nint GetProcessWindowStation();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool PostMessage(nint window, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern nint CreateDesktop(string name, nint device, nint mode, uint flags, uint access, nint attributes);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

@@ -179,6 +179,7 @@ internal static class Program
         {
             WriteFixtures(temp.FullName);
             var assembly = Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "PixelThumbs.dll"));
+            CheckPreviewWindow(assembly);
             CheckSettingsPixels(assembly);
             CheckNonBlockingCancellation(assembly);
             var type = assembly.GetType("PixelThumbs.QuickPreviewHotkey", throwOnError: true)!;
@@ -221,6 +222,25 @@ internal static class Program
             return 1;
         }
         finally { temp.Delete(recursive: true); }
+    }
+
+    private static void CheckPreviewWindow(Assembly assembly)
+    {
+        var type = assembly.GetType("PixelThumbs.QuickPreviewForm", throwOnError: true)!;
+        var screen = SystemInformation.VirtualScreen;
+        using var preview = (Form)Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.NonPublic,
+            null, [384, Screen.PrimaryScreen!.WorkingArea.Location, "B.stl"], null)!;
+        preview.Location = new Point(screen.Right + 64, screen.Top);
+        nint foreground = GetForegroundWindow();
+        preview.Show();
+        nint handle = preview.Handle;
+        Assert(IsWindowVisible(handle), "The quick preview window was not shown immediately.");
+        Assert(GetLayeredWindowAttributes(handle, out _, out byte alpha, out uint flags) && (flags & 2) != 0 && alpha == 255,
+            $"The quick preview window must start at full opacity. Actual alpha: {alpha}.");
+        Assert(GetForegroundWindow() == foreground, "Showing the quick preview took foreground focus.");
+        preview.Dispose();
+        Assert(!IsWindow(handle), "Disposing the quick preview left its window open.");
+        Console.WriteLine("PASS quick preview starts fully opaque and closes immediately without taking focus.");
     }
 
     private static void CheckSettingsPixels(Assembly assembly)
@@ -860,6 +880,32 @@ internal static class Program
                 JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(configuration))?.DefaultStyle.Yaw == 35,
                 "The staged revision is remembered and the draft remains separate from applied settings.");
             Console.WriteLine("PASS restart button, incomplete package fallback, failed-launch recovery, local update and draft handoff.");
+
+            string nonce = Guid.NewGuid().ToString("N");
+            var command = new ProcessStartInfo(staged) { WorkingDirectory = stagedDirectory, UseShellExecute = false };
+            command.ArgumentList.Add("--restart-after");
+            command.ArgumentList.Add(updated.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            command.ArgumentList.Add(nonce);
+            command.ArgumentList.Add(Convert.ToBase64String(Encoding.UTF8.GetBytes(profile)));
+            using var successor = Process.Start(command)!;
+            try
+            {
+                Assert(SpinWait.SpinUntil(() =>
+                {
+                    if (!EventWaitHandle.TryOpenExisting(@"Local\PixelThumbs.Restart." + nonce + ".Ready", out var ready))
+                        return false;
+                    using (ready) return ready.WaitOne(0);
+                }, 5000), "The standard-user restart did not signal readiness.");
+                Assert(!successor.HasExited && VisibleWindow(successor.Id, overlay: false) == 0,
+                    "The standard-user restart started a second tray before the predecessor left.");
+                using var proceed = EventWaitHandle.OpenExisting(@"Local\PixelThumbs.Restart." + nonce + ".Proceed");
+                proceed.Set();
+                StopApp(updated);
+                ExpectDraft(SettingsWindow(successor));
+                Assert(ReadLaunchRevision(latest) > originalRevision, "The successor did not use the same profile.");
+                Console.WriteLine("PASS restart successor waits for the predecessor and opens with its profile and draft.");
+            }
+            finally { StopApp(successor); }
             return 0;
         }
         catch (Exception error)
@@ -1096,7 +1142,9 @@ internal static class Program
 
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindow callback, nint parameter);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out int process);
+    [DllImport("user32.dll")] private static extern bool IsWindow(nint window);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint window);
+    [DllImport("user32.dll")] private static extern bool GetLayeredWindowAttributes(nint window, out uint colorKey, out byte alpha, out uint flags);
     [DllImport("user32.dll")] private static extern bool IsIconic(nint window);
     [DllImport("user32.dll")] private static extern bool ShowWindow(nint window, int command);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint window);

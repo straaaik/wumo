@@ -1,5 +1,9 @@
 using PixelThumbs;
 using PixelThumbs.ClipboardHistory;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
+using Point = System.Windows.Point;
 
 try { return Run(args); }
 catch (Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -9,12 +13,17 @@ static int Run(string[] args)
     if (args.Contains("--native") || args.Contains("--idle"))
         return NativeChecks.Run(args);
     CheckHistory();
+    CheckFavorites();
     CheckShelfMotion();
     // Image and transfer checks can run without touching the system clipboard.
     Exception? failure = null;
     var sta = new Thread(() =>
     {
-        try { NativeChecks.CheckTransfer(); }
+        try
+        {
+            CheckWidgetGestures();
+            NativeChecks.CheckTransfer();
+        }
         catch (Exception error) { failure = error; }
     });
     sta.SetApartmentState(ApartmentState.STA);
@@ -23,6 +32,52 @@ static int Run(string[] args)
     if (failure is not null)
         throw failure;
     return 0;
+}
+
+static void CheckWidgetGestures()
+{
+    var widget = new WidgetChoice();
+    int changes = 0;
+    widget.WidgetEnabledChanged += (_, _) => changes++;
+
+    Require(!DragTo(4, 2) && !widget.WidgetEnabled, "a small movement remains a click");
+    Require(DragTo(20, 0) && !widget.WidgetEnabled, "a short drag is consumed without changing state");
+    Require(DragTo(41, 59) && !widget.WidgetEnabled, "a vertical drag does not toggle the widget");
+    widget.BeginGesture(default);
+    widget.MoveGesture(new Point(16, 0));
+    double first = widget.GradientProgress;
+    widget.MoveGesture(new Point(32, 0));
+    double middle = widget.GradientProgress;
+    widget.MoveGesture(new Point(48, 0));
+    Require(first > 0 && first < middle && middle < widget.GradientProgress && widget.GradientProgress < 1 && !widget.WidgetEnabled,
+        "gradient keeps tracking the pointer before and after the commit threshold");
+    widget.MoveGesture(new Point(16, 0));
+    Require(widget.GradientProgress == first, "reversing the drag immediately reverses the gradient");
+    Require(widget.EndGesture(new Point(38, 4)) && widget.WidgetEnabled && changes == 1 && widget.IsChecked == false,
+        "a right swipe enables without selecting the widget page");
+    Require(DragTo(38, 0) && widget.WidgetEnabled && changes == 1, "a repeated swipe is idempotent");
+
+    widget.BeginGesture(default);
+    widget.MoveGesture(new Point(-55, 0));
+    Require(widget.WidgetEnabled && widget.EndGesture(new Point(-2, 0)) && changes == 1,
+        "dragging previews the state without committing before release and a reversal cancels the swipe");
+    Require(DragTo(-38, -4) && !widget.WidgetEnabled && changes == 2, "a left swipe disables the widget");
+
+    var peer = UIElementAutomationPeer.CreatePeerForElement(widget)!;
+    var toggle = (IToggleProvider)peer.GetPattern(PatternInterface.Toggle)!;
+    toggle.Toggle();
+    Require(toggle.ToggleState == ToggleState.On && widget.WidgetEnabled && changes == 3 && widget.IsChecked == false,
+        "the accessible toggle changes power independently of page selection");
+    Require(peer.GetPattern(PatternInterface.SelectionItem) is ISelectionItemProvider,
+        "the accessible row also retains page navigation");
+
+    Console.WriteLine("Widget swipes, thresholds, cancellation and accessible power toggle passed.");
+
+    bool DragTo(double x, double y)
+    {
+        widget.BeginGesture(default);
+        return widget.EndGesture(new Point(x, y));
+    }
 }
 
 static void CheckHistory()
@@ -54,6 +109,45 @@ static void CheckHistory()
 
 static ClipboardItem Item(ClipboardKind kind, string key, int bytes = 16) =>
     new(kind, key, key, [new ClipboardPayload(13, -1, new byte[bytes])], [], null, null, false, null);
+
+static void CheckFavorites()
+{
+    var time = DateTime.UtcNow.AddHours(-2);
+    var history = new HistoryStore(maxBytes: 110, maxEntries: 2);
+    var text = history.Add(Item(ClipboardKind.Text, "text"), time);
+    var image = history.Add(Item(ClipboardKind.Image, "image"), time.AddMinutes(1));
+    Require(!history.Group(text, text) && history.Group(text, image), "drop two different cards to create a folder");
+    var folder = history.Folders.Single();
+    Require(history.Entries.Count == 0 && history.Bytes == 0 && folder.Entries.SequenceEqual(new[] { image, text }),
+        "folder replaces both root cards and protects the originals");
+    var file = history.Add(Item(ClipboardKind.Files, "file"), time.AddMinutes(2));
+    Require(history.AddToFolder(file, folder.Id) && history.RenameFolder(folder.Id, "Документы") &&
+        !history.AddToFolder(file, folder.Id) && history.Folders.Single().Entries.Length == 3, "add to and rename an existing folder");
+    var favorite = history.Add(Item(ClipboardKind.Files, "favorite"), time.AddMinutes(3));
+    var renamed = favorite with { Name = "Образец" };
+    Require(history.TogglePin(favorite, time, out _) && history.Rename(favorite, renamed),
+        "pin and rename a single file");
+    for (int i = 0; i < 5; i++)
+        history.Add(Item(ClipboardKind.Text, $"recent {i}"), time.AddMinutes(4 + i));
+    Require(history.Entries.Count == 2 && !history.Remove(renamed) && !history.Remove(file),
+        "history limits and scoped removal leave favorites intact");
+    history.Clear();
+    Require(history.Entries.Count == 0 && history.Favorites.Single() == renamed && history.Folders.Single().Name == "Документы",
+        "clearing history leaves saved data intact");
+
+    var reloaded = new HistoryStore();
+    reloaded.Add(file.Item, time);
+    Require(reloaded.LoadFavorites(history.SnapshotFavorites()) && reloaded.Entries.Count == 0 &&
+        reloaded.Add(file.Item, time) == file, "reloading or recopying a saved item cannot create a duplicate");
+    Require(reloaded.RemoveSaved(file) && reloaded.Folders.Single().Entries.Length == 2 && reloaded.Favorites.Single() == renamed,
+        "delete a single saved folder entry");
+    Require(reloaded.RemoveFolder(folder.Id) && !reloaded.RemoveFolder(folder.Id) &&
+        reloaded.Folders.Count == 0 && !reloaded.Contains(text) && reloaded.Favorites.Single() == renamed,
+        "explicit folder removal deletes its contents and preserves other favorites");
+    Require(reloaded.TogglePin(renamed, DateTime.UtcNow, out var recent) && reloaded.Favorites.Count == 0 &&
+        reloaded.Entries.Single() == recent && recent.Name == "Образец", "unpin returns the renamed entry to regular history");
+    Console.WriteLine("Favorite and folder grouping, rename, limits, deduplication and individual actions passed.");
+}
 
 static void CheckShelfMotion()
 {

@@ -15,7 +15,7 @@ internal sealed class DragPreview : ClipboardNative.IDropSource
 
     internal DragPreview(ClipboardItem item, Border origin)
     {
-        if (!SystemParameters.ClientAreaAnimation || SystemParameters.HighContrast)
+        if (!UiMotion.IsEnabled)
             return;
         card = origin;
         ghost = new Window
@@ -59,6 +59,12 @@ internal sealed class DragPreview : ClipboardNative.IDropSource
     {
         if (ghost is null || card is null)
             return;
+        if (!UiMotion.IsEnabled)
+        {
+            card.Opacity = 1;
+            ghost.Close();
+            return;
+        }
         bool returnToCard = !dropped && PresentationSource.FromVisual(card) is not null;
         if (returnToCard)
         {

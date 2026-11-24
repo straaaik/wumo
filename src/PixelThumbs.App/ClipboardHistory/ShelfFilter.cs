@@ -1,6 +1,6 @@
 namespace PixelThumbs.ClipboardHistory;
 
-internal enum ShelfFilter { All, Text, Links, Images, Files, Other }
+internal enum ShelfFilter { All, Text, Links, Images, Files, Other, Favorites }
 
 internal static class ShelfFilters
 {
@@ -23,5 +23,5 @@ internal static class ShelfFilters
             Contains(item.TextPreview, query) ||
             item.Kind == ClipboardKind.Text && ClipboardCapture.ContainsText(item.Payloads, query));
 
-    private static bool Contains(string? text, string query) => text?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
+    internal static bool Contains(string? text, string query) => text?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
 }

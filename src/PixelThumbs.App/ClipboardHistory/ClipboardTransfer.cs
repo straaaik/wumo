@@ -9,13 +9,19 @@ namespace PixelThumbs.ClipboardHistory;
 
 internal sealed class ClipboardTransfer : ComDataObject
 {
+    internal const string ShelfEntryFormat = "Wumo.ClipboardShelf.Entry";
+    private static readonly uint ShelfEntry = RegisterClipboardFormat(ShelfEntryFormat);
     private const int FormatError = unchecked((int)0x80040064);
     private const int MediumError = unchecked((int)0x80040069);
     private const int NotImplemented = unchecked((int)0x80004001);
     private readonly List<Offer> offers = [];
 
-    internal ClipboardTransfer(ClipboardItem item, bool dragging)
+    internal ClipboardTransfer(ClipboardItem item, bool dragging, bool fromShelf = false, bool internalOnly = false)
     {
+        if (fromShelf)
+            offers.Add(new(ShelfEntry, -1, TYMED.TYMED_HGLOBAL, () => [1]));
+        if (internalOnly)
+            return;
         foreach (var part in item.Payloads)
         {
             TYMED medium = part.Format == EnhancedMetafile ? TYMED.TYMED_ENHMF : TYMED.TYMED_HGLOBAL;

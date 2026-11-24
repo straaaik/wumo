@@ -31,6 +31,20 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
         ConsoleTheme.ConfigureNativeControls();
+        if (args is ["--restart-after", ..])
+        {
+            try
+            {
+                if (args is not [_, var predecessor, var nonce, var profile] ||
+                    !StandardUserRestart.WaitForPredecessor(predecessor, nonce, profile))
+                    return 1;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or FormatException)
+            {
+                Trace.TraceWarning($"PixelThumbs restart handoff: {error.Message}");
+                return 1;
+            }
+        }
         if (args is ["--refresh", .. var paths])
             return Refresh(paths);
         if (args is ["--unregister"])
@@ -182,6 +196,22 @@ internal static class Program
                     return null;
                 if (settings?.CanRestart == false)
                     return "Дождитесь завершения текущего действия.";
+
+                if (TrayLauncher.RequiresStandardUser(target))
+                {
+                    using var pending = await StandardUserRestart.StartAndWaitAsync(target, stop);
+                    if (replacing || closing)
+                        return null;
+                    if (pending is null)
+                        return "Новая сборка Wumo не подтвердила запуск.";
+                    if (settings is not null && !settings.PrepareForUpgrade())
+                        return "Дождитесь завершения текущего действия.";
+                    if (!pending.Commit())
+                        return "Процесс обновления Wumo завершился при запуске.";
+                    replacing = true;
+                    ExitThread();
+                    return null;
+                }
 
                 requestedRestartRevision = target.Revision;
                 using var child = await Task.Run(() => TrayLauncher.StartBuild(target, TrayLaunchAction.Restart), stop);

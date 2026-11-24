@@ -15,6 +15,7 @@ internal sealed class HistoryWidget : IDisposable
     private readonly Control dispatcher;
     private readonly HistoryStore history = new();
     private readonly HistoryJournal journal = new(Path.Combine(SettingsStore.DataDirectory, "clipboard-history.dat"));
+    private readonly HistoryJournal favoritesJournal = new(Path.Combine(SettingsStore.DataDirectory, "clipboard-favorites.dat"));
     private readonly DispatcherTimer expiration = new();
     private readonly DispatcherTimer deferredSave = new() { Interval = TimeSpan.FromMilliseconds(1500) };
     private ClipboardShelf? shelf;
@@ -34,7 +35,10 @@ internal sealed class HistoryWidget : IDisposable
     private bool waitingToSave;
     private bool journalReady;
     private bool journalDirty;
+    private bool favoritesLoading;
+    private bool favoritesReady;
     private Task journalQueue = Task.CompletedTask;
+    private Task<bool>? favoritesSave;
     private int journalEpoch;
     private int generation;
     private int restoreVersion;
@@ -68,6 +72,7 @@ internal sealed class HistoryWidget : IDisposable
                 worker = null;
                 // OLE owns the published transfer until the Windows clipboard changes.
                 published = null;
+                current = null;
                 ClearHistory();
             }
         }
@@ -80,7 +85,11 @@ internal sealed class HistoryWidget : IDisposable
                 catch (Win32Exception error) { Trace.TraceWarning($"Clipboard listener: {error.Message}"); }
             }
             if (Active)
+            {
                 EnsureShelf();
+                if (!favoritesReady && !favoritesLoading)
+                    LoadFavorites();
+            }
         }
         shelf?.Configure(options);
         bool persist = Active && options.KeepBetweenSessions;
@@ -103,13 +112,19 @@ internal sealed class HistoryWidget : IDisposable
         if (shelf is not null)
             return;
         shelf = new ClipboardShelf();
+        System.Windows.Forms.Integration.ElementHost.EnableModelessKeyboardInterop(shelf);
         shelf.Restore += RestoreToClipboard;
         shelf.Drag += BeginDrag;
         shelf.Remove += RemoveEntry;
+        shelf.RemoveFolder += RemoveFolder;
+        shelf.TogglePin += TogglePin;
+        shelf.Rename += RenameEntry;
+        shelf.RenameFolder += RenameFolder;
+        shelf.Group += GroupEntries;
         shelf.ClearClipboard += ClearSystemClipboard;
         shelf.Clear += ClearSelection;
         shelf.Imported += ImportDropped;
-        shelf.SetEntries(history.Entries);
+        UpdateShelf();
         SystemEvents.DisplaySettingsChanged += DisplayChanged;
         SystemEvents.UserPreferenceChanged += PreferenceChanged;
     }
@@ -189,7 +204,7 @@ internal sealed class HistoryWidget : IDisposable
         if (revision == generation && result.Item is { } item && (item.Kind & options.Types) != 0)
         {
             var entry = history.Add(item, request.Time);
-            bool retained = ReferenceEquals(history.Entries.FirstOrDefault(), entry);
+            bool retained = history.Contains(entry);
             if (pending?.Sequence == result.Sequence)
                 pending = null; // Rendering a delayed format can generate another notification.
             if (GetClipboardSequenceNumber() == result.Sequence && ownClipboard == 0)
@@ -247,9 +262,9 @@ internal sealed class HistoryWidget : IDisposable
 
     private void HistoryChanged()
     {
-        if (current is { } entry && !history.Entries.Contains(entry))
+        if (current is { } entry && !history.Contains(entry))
             current = null;
-        shelf?.SetEntries(history.Entries);
+        UpdateShelf();
         ScheduleExpiration();
         if (!Active || !options.KeepBetweenSessions)
             return;
@@ -262,10 +277,99 @@ internal sealed class HistoryWidget : IDisposable
 
     private void RemoveEntry(HistoryEntry entry)
     {
-        history.Remove(entry);
+        if (history.Remove(entry))
+            HistoryChanged();
+        else if (CanEditFavorites() && history.RemoveSaved(entry))
+            FavoritesChanged();
+    }
+
+    private void RemoveFolder(Guid id)
+    {
+        if (CanEditFavorites() && history.RemoveFolder(id))
+            FavoritesChanged();
+    }
+
+    private void TogglePin(HistoryEntry entry)
+    {
+        if (!CanEditFavorites() || !history.TogglePin(entry, DateTime.UtcNow, out var replacement))
+            return;
         if (ReferenceEquals(current, entry))
-            current = null;
+            current = replacement;
+        FavoritesChanged();
+    }
+
+    private HistoryEntry? RenameEntry(HistoryEntry entry, string name)
+    {
+        var replacement = entry with { Name = name };
+        if (!CanEditFavorites() || !history.Rename(entry, replacement))
+            return null;
+        if (ReferenceEquals(current, entry))
+            current = replacement;
+        FavoritesChanged();
+        return replacement;
+    }
+
+    private bool RenameFolder(Guid id, string name)
+    {
+        if (!CanEditFavorites() || !history.RenameFolder(id, name))
+            return false;
+        FavoritesChanged();
+        return true;
+    }
+
+    private bool GroupEntries(HistoryEntry source, HistoryEntry? target, Guid? folder)
+    {
+        if (!CanEditFavorites())
+            return false;
+        bool changed = folder is { } id ? history.AddToFolder(source, id) : target is not null && history.Group(source, target);
+        if (changed)
+        {
+            FavoritesChanged();
+            shelf?.SetStatus(folder is null ? "Папка создана" : "Добавлено в папку");
+        }
+        return changed;
+    }
+
+    private bool CanEditFavorites()
+    {
+        if (favoritesReady)
+            return true;
+        shelf?.SetStatus(favoritesLoading ? "Избранное ещё загружается" : "Не удалось открыть избранное");
+        return false;
+    }
+
+    private void FavoritesChanged()
+    {
+        SaveFavorites();
         HistoryChanged();
+    }
+
+    private void SaveFavorites()
+    {
+        var snapshot = history.SnapshotFavorites();
+        favoritesSave = RunJournal(() => favoritesJournal.SaveFavorites(snapshot), "Не удалось сохранить избранное");
+    }
+
+    private void UpdateShelf() => shelf?.SetEntries(history.Entries, history.Favorites, history.Folders);
+
+    private async void LoadFavorites()
+    {
+        favoritesLoading = true;
+        HistoryFavorites? loaded = null;
+        await RunJournal(() => loaded = favoritesJournal.LoadFavorites(), "Не удалось открыть избранное");
+        favoritesLoading = false;
+        if (disposed || loaded is null)
+            return;
+        favoritesReady = true;
+        if (history.LoadFavorites(loaded))
+        {
+            if (current is { } entry)
+                current = loaded.Entries.Concat(loaded.Folders.SelectMany(folder => folder.Entries))
+                    .FirstOrDefault(saved => saved.Item.Kind == entry.Item.Kind && saved.Item.Key == entry.Item.Key) ?? entry;
+            HistoryChanged();
+        }
+        else
+            UpdateShelf();
     }
 
     private void ClearHistory()
@@ -275,7 +379,6 @@ internal sealed class HistoryWidget : IDisposable
         if (Active && options.KeepBetweenSessions && !journalReady)
             journalReady = true;
         history.Clear();
-        current = null;
         HistoryChanged();
     }
 
@@ -287,11 +390,7 @@ internal sealed class HistoryWidget : IDisposable
             return;
         }
         foreach (var entry in selected)
-        {
             history.Remove(entry);
-            if (ReferenceEquals(current, entry))
-                current = null;
-        }
         HistoryChanged();
     }
 
@@ -345,7 +444,7 @@ internal sealed class HistoryWidget : IDisposable
                 history.AddOlder(entry);
         }
         PruneExpired();
-        shelf?.SetEntries(history.Entries);
+        UpdateShelf();
         if (changed)
             HistoryChanged();
     }
@@ -364,26 +463,39 @@ internal sealed class HistoryWidget : IDisposable
 
     private void SaveJournal()
     {
-        if (!journalReady || !journalDirty || !options.KeepBetweenSessions)
+        if (!journalReady || !journalDirty || !options.KeepBetweenSessions ||
+            favoritesSave is { IsCompletedSuccessfully: true, Result: false })
             return;
         journalDirty = false;
         var snapshot = history.Entries.ToArray();
-        _ = RunJournal(() => journal.Save(snapshot));
+        var archive = favoritesSave;
+        _ = RunJournal(() =>
+        {
+            // Preserve the previous history snapshot if moving an entry to Favorites could not be saved.
+            if (archive?.GetAwaiter().GetResult() != false)
+                journal.Save(snapshot);
+        });
     }
 
-    private Task RunJournal(Action operation)
+    private Task<bool> RunJournal(Action operation, string failureMessage = "Не удалось прочитать или сохранить историю")
     {
-        journalQueue = journalQueue.ContinueWith(_ =>
+        var queued = journalQueue.ContinueWith(_ =>
         {
-            try { operation(); }
+            try
+            {
+                operation();
+                return true;
+            }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or Win32Exception or
                 InvalidDataException or ArgumentException or NotSupportedException)
             {
                 Trace.TraceWarning($"Clipboard history: {error.Message}");
-                Post(() => { if (!disposed) shelf?.SetStatus("Не удалось прочитать или сохранить историю"); });
+                Post(() => { if (!disposed) shelf?.SetStatus(failureMessage); });
+                return false;
             }
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-        return journalQueue;
+        journalQueue = queued;
+        return queued;
     }
 
     private async void RestoreToClipboard(HistoryEntry entry, ClipboardShelf panel)
@@ -429,11 +541,13 @@ internal sealed class HistoryWidget : IDisposable
         bool dropped = false;
         try
         {
-            if (!await Available(entry, panel) || !Active || !panel.IsVisible ||
+            bool available = await Available(entry, panel);
+            if (!CanUse(entry) || !panel.IsVisible ||
                 System.Windows.Input.Mouse.LeftButton != MouseButtonState.Pressed)
                 return;
-            var transfer = new ClipboardTransfer(entry.Item, dragging: true);
+            var transfer = new ClipboardTransfer(entry.Item, dragging: true, fromShelf: true, internalOnly: !available);
             preview = new DragPreview(entry.Item, card);
+            panel.SetDragSource(entry);
             dropped = DoDragDrop(transfer, preview, CopyEffect, out int effect) == DragDrop && effect == CopyEffect;
         }
         catch (Exception error) when (error is COMException or InvalidOperationException or OutOfMemoryException)
@@ -478,7 +592,7 @@ internal sealed class HistoryWidget : IDisposable
     }
 
     private bool CanUse(HistoryEntry entry) =>
-        Active && (entry.Item.Kind & options.Types) != 0 && history.Entries.Contains(entry);
+        Active && history.Contains(entry);
 
     private void ClearSystemClipboard(HistoryEntry entry, ClipboardShelf panel)
     {
@@ -535,6 +649,12 @@ internal sealed class HistoryWidget : IDisposable
         worker?.Dispose();
         expiration.Stop();
         deferredSave.Stop();
+        journalQueue.GetAwaiter().GetResult();
+        if (favoritesSave is { Result: false })
+        {
+            SaveFavorites();
+            journalQueue.GetAwaiter().GetResult();
+        }
         SaveJournal();
         journalQueue.GetAwaiter().GetResult();
         CloseShelf();

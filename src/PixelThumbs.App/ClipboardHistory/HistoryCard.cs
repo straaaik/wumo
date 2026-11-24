@@ -1,24 +1,29 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using Brush = System.Windows.Media.Brush;
 using ContextMenu = System.Windows.Controls.ContextMenu;
-using MenuItem = System.Windows.Controls.MenuItem;
 using Point = System.Windows.Point;
 
 namespace PixelThumbs.ClipboardHistory;
 
 internal static class HistoryCard
 {
-    internal static void Attach(Border card, Action restore, Action<Border> drag, Action remove,
-        Action clearClipboard, Action clearHistory, Action<bool> menuState)
+    internal static void Attach(Border card, Action open, Action<Border> drag, ContextMenu menu)
     {
         card.Cursor = System.Windows.Input.Cursors.Hand;
         card.Focusable = true;
+        var restingBrush = card.Background;
+        var pressedBrush = card.TryFindResource("Frame") as Brush;
         Point? start = null;
         card.PreviewMouseLeftButtonDown += (_, e) =>
         {
+            if (IsControl(e.OriginalSource))
+                return;
             start = e.GetPosition(card);
-            card.CaptureMouse();
+            if (card.CaptureMouse() && pressedBrush is not null)
+                UiMotion.SetBackground(card, pressedBrush);
             e.Handled = true;
         };
         card.PreviewMouseMove += (_, e) =>
@@ -40,33 +45,32 @@ internal static class HistoryCard
             start = null;
             card.ReleaseMouseCapture();
             e.Handled = true;
-            restore();
+            open();
         };
-        card.LostMouseCapture += (_, _) => start = null;
+        card.LostMouseCapture += (_, e) =>
+        {
+            start = null;
+            if (ReferenceEquals(e.OriginalSource, card))
+                UiMotion.SetBackground(card, restingBrush);
+        };
         card.KeyDown += (_, e) =>
         {
-            if (e.Key is Key.Enter or Key.Space)
+            if ((e.Key is Key.Enter or Key.Space) && !IsControl(e.OriginalSource))
             {
                 e.Handled = true;
-                restore();
+                open();
             }
         };
 
-        var menu = new ContextMenu();
-        AddMenu(menu, "Вернуть в буфер", restore);
-        AddMenu(menu, "Удалить из истории", remove);
-        AddMenu(menu, "Очистить системный буфер", clearClipboard);
-        menu.Items.Add(new System.Windows.Controls.Separator());
-        AddMenu(menu, "Очистить историю", clearHistory);
-        menu.Opened += (_, _) => menuState(true);
-        menu.Closed += (_, _) => menuState(false);
         card.ContextMenu = menu;
-    }
 
-    private static void AddMenu(ContextMenu menu, string name, Action invoke)
-    {
-        var item = new MenuItem { Header = name };
-        item.Click += (_, _) => invoke();
-        menu.Items.Add(item);
+        bool IsControl(object source)
+        {
+            for (var element = source as Visual; element is not null && element != card;
+                element = VisualTreeHelper.GetParent(element) as Visual)
+                if (element is System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.Primitives.TextBoxBase)
+                    return true;
+            return false;
+        }
     }
 }

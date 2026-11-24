@@ -118,26 +118,11 @@ internal static class TrayLauncher
 
     internal static Process StartBuild(InstalledBuild build, TrayLaunchAction action)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        if (!build.Directory.Equals(InstalledBuild.Current.Directory, StringComparison.OrdinalIgnoreCase) &&
-            new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+        if (RequiresStandardUser(build))
             throw new InvalidOperationException($"Откройте новую сборку напрямую: {build.Executable}");
 
         if (action == TrayLaunchAction.Restart)
-        {
-            try
-            {
-                using var binary = File.OpenRead(build.Executable);
-                using var reader = new PEReader(binary);
-                if (reader.PEHeaders.PEHeader is null || reader.PEHeaders.IsDll ||
-                    reader.PEHeaders.CoffHeader.Machine != Machine.Amd64)
-                    throw new BadImageFormatException();
-            }
-            catch (BadImageFormatException error)
-            {
-                throw new InvalidOperationException("Файл запуска сборки Wumo повреждён.", error);
-            }
-        }
+            ValidateRestartExecutable(build);
 
         var command = new ProcessStartInfo(build.Executable) { WorkingDirectory = build.Directory, UseShellExecute = false };
         if (action == TrayLaunchAction.Background)
@@ -145,6 +130,30 @@ internal static class TrayLauncher
         else if (action == TrayLaunchAction.Restart)
             command.ArgumentList.Add("--restart");
         return Process.Start(command) ?? throw new InvalidOperationException("Не удалось открыть сборку Wumo.");
+    }
+
+    internal static bool RequiresStandardUser(InstalledBuild build)
+    {
+        if (build.Directory.Equals(InstalledBuild.Current.Directory, StringComparison.OrdinalIgnoreCase))
+            return false;
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    internal static void ValidateRestartExecutable(InstalledBuild build)
+    {
+        try
+        {
+            using var binary = File.OpenRead(build.Executable);
+            using var reader = new PEReader(binary);
+            if (reader.PEHeaders.PEHeader is null || reader.PEHeaders.IsDll ||
+                reader.PEHeaders.CoffHeader.Machine != Machine.Amd64)
+                throw new BadImageFormatException();
+        }
+        catch (BadImageFormatException error)
+        {
+            throw new InvalidOperationException("Файл запуска сборки Wumo повреждён.", error);
+        }
     }
 
     private static bool Acquire(Mutex mutex, int wait)

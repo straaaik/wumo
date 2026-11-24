@@ -11,6 +11,7 @@ internal sealed class TrayMenu : ContextMenuStrip
     private readonly ToolStripSeparator divider = new();
     private readonly ToolStripMenuItem exitItem = new("Выйти из трея");
     private readonly bool useSystemTheme = SystemInformation.HighContrast;
+    private MenuRenderer? menuRenderer;
 
     internal TrayMenu(Action open, Action exit, ClipboardHistory.HistoryWidget clipboard)
     {
@@ -40,7 +41,8 @@ internal sealed class TrayMenu : ContextMenuStrip
         BackColor = Raised;
         ForeColor = Sand;
         Font = Mono(9);
-        Renderer = new MenuRenderer(this);
+        menuRenderer = new MenuRenderer(this);
+        Renderer = menuRenderer;
         AutoSize = false;
         SetMetrics();
     }
@@ -66,6 +68,22 @@ internal sealed class TrayMenu : ContextMenuStrip
     {
         base.OnOpened(e);
         SetShape();
+    }
+
+    protected override void OnClosed(ToolStripDropDownClosedEventArgs e)
+    {
+        menuRenderer?.ResetHighlight();
+        base.OnClosed(e);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            menuRenderer?.Dispose();
+            menuRenderer = null;
+        }
+        base.Dispose(disposing);
     }
 
     protected override void OnSizeChanged(EventArgs e)
@@ -99,10 +117,37 @@ internal sealed class TrayMenu : ContextMenuStrip
         finally { ResumeLayout(performLayout: true); }
     }
 
-    private sealed class MenuRenderer(TrayMenu menu) : ToolStripRenderer
+    private sealed class MenuRenderer : ToolStripRenderer, IDisposable
     {
+        private const int HighlightDuration = 120;
         private static readonly Color OpenIcon = Color.FromArgb(0x00, 0xD3, 0xF3);
         private static readonly Color ExitIcon = Color.FromArgb(0xFF, 0x63, 0x7E);
+        private readonly TrayMenu menu;
+        private readonly Dictionary<ToolStripItem, Highlight> highlights = [];
+        private readonly System.Windows.Forms.Timer highlightTimer = new() { Interval = 15 };
+
+        internal MenuRenderer(TrayMenu menu)
+        {
+            this.menu = menu;
+            highlightTimer.Tick += (_, _) =>
+            {
+                long now = Environment.TickCount64;
+                foreach (ToolStripItem item in highlights.Keys)
+                    item.Invalidate();
+                if (!AnimateHighlight || !highlights.Values.Any(state => now - state.Started < HighlightDuration))
+                    highlightTimer.Stop();
+            };
+        }
+
+        private static bool AnimateHighlight => UiMotion.IsEnabled && System.Windows.SystemParameters.MenuAnimation;
+
+        internal void ResetHighlight()
+        {
+            highlightTimer.Stop();
+            highlights.Clear();
+        }
+
+        public void Dispose() => highlightTimer.Dispose();
 
         protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
         {
@@ -124,16 +169,48 @@ internal sealed class TrayMenu : ContextMenuStrip
         protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
         {
             int dpi = menu.DeviceDpi;
-            if (e.Item.Selected || e.Item.Pressed)
+            bool selected = e.Item.Selected || e.Item.Pressed;
+            double highlight = ReferenceEquals(e.ToolStrip, menu) && AnimateHighlight
+                ? HighlightOpacity(e.Item, selected)
+                : selected ? 1 : 0;
+            if (e.Item.Pressed || highlight > 0)
             {
                 var bounds = Rectangle.Inflate(new Rectangle(Point.Empty, e.Item.Size), -Pixels(5, dpi), -Pixels(1, dpi));
-                Frame(e.Graphics, bounds, Selected, Selected, Pixels(4, dpi));
+                Color fill = e.Item.Pressed ? Selected : Color.FromArgb(
+                    (int)Math.Round(Raised.R + (Selected.R - Raised.R) * highlight),
+                    (int)Math.Round(Raised.G + (Selected.G - Raised.G) * highlight),
+                    (int)Math.Round(Raised.B + (Selected.B - Raised.B) * highlight));
+                Frame(e.Graphics, bounds, fill, fill, Pixels(4, dpi));
             }
 
             if (ReferenceEquals(e.Item, menu.openItem))
                 DrawIcon(e.Graphics, dpi, e.Item.Height, OpenIcon, opening: true);
             else if (ReferenceEquals(e.Item, menu.exitItem))
                 DrawIcon(e.Graphics, dpi, e.Item.Height, ExitIcon, opening: false);
+        }
+
+        private double HighlightOpacity(ToolStripItem item, bool selected)
+        {
+            long now = Environment.TickCount64;
+            highlights.TryGetValue(item, out var state);
+            if (state.Selected != selected)
+            {
+                double opacity = state.Opacity(now);
+                state = new Highlight(selected, selected ? Math.Max(.35, opacity) : opacity, now);
+                highlights[item] = state;
+                highlightTimer.Start();
+            }
+            return state.Opacity(now);
+        }
+
+        private readonly record struct Highlight(bool Selected, double From, long Started)
+        {
+            internal double Opacity(long now)
+            {
+                double target = Selected ? 1 : 0;
+                double remaining = Math.Max(0, 1 - (double)(now - Started) / HighlightDuration);
+                return target + (From - target) * remaining * remaining;
+            }
         }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)

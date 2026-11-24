@@ -10,6 +10,7 @@
     <Geometry x:Key="PowerIcon">M12 2v10 M18.4 6.6a9 9 0 1 1-12.77.04</Geometry>
     <Geometry x:Key="PanelIcon">M3 5 H21 V19 H3 Z M15 5 V19 M17.5 9 H18.5</Geometry>
     <Geometry x:Key="ModelIcon">M12 2 L21 7 V17 L12 22 L3 17 V7 Z M3 7 L12 12 L21 7 M12 12 V22</Geometry>
+    <Geometry x:Key="ClipboardIcon">M8 4 H6 Q4 4 4 6 V20 Q4 22 6 22 H18 Q20 22 20 20 V6 Q20 4 18 4 H16 M9 2 H15 Q16 2 16 3 V5 Q16 6 15 6 H9 Q8 6 8 5 V3 Q8 2 9 2 Z M8 12 H16 M8 17 H14</Geometry>
     <Geometry x:Key="SettingsIcon">M14 17H5 M19 7h-9 M14,17 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z M4,7 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z</Geometry>
     <Geometry x:Key="GearIcon">M10 2h4l.65 2.75 1.85 1.07 2.73-.8 2 3.46-2.07 1.95v2.14l2.07 1.95-2 3.46-2.73-.8-1.85 1.07L14 21h-4l-.65-2.75-1.85-1.07-2.73.8-2-3.46 2.07-1.95v-2.14L2.77 8.48l2-3.46 2.73.8 1.85-1.07L10 2z M12,8.5 a3,3 0 1 0 0,6 a3,3 0 1 0 0,-6 z</Geometry>
 </ResourceDictionary>

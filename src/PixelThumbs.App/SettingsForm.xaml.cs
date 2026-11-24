@@ -50,6 +50,7 @@ public sealed partial class SettingsForm : Window
     private bool recoveredDraft;
     private PreviewCancellation? previewRender;
     private WorkerClient.DesktopMeshPreview? meshPreview;
+    private FrameworkElement? activePage;
     private bool previewPending;
     private bool previewQueued;
     private bool refreshing;
@@ -57,6 +58,7 @@ public sealed partial class SettingsForm : Window
     private bool closed;
     private bool shuttingDown;
     private int previewVersion;
+    private int revealedPreviewVersion = -1;
     private int resolution = 256;
 
     public SettingsForm()
@@ -86,7 +88,7 @@ public sealed partial class SettingsForm : Window
         PreviewSize.SelectedValue = resolution;
         StylePresets.ItemsSource = Presets;
         AutoStart.IsChecked = settings.AutoStart;
-        ThumbnailsWidgetSwitch.IsChecked = settings.ThumbnailsWidgetEnabled;
+        PixelThumbsChoice.WidgetEnabled = settings.ThumbnailsWidgetEnabled;
         UpdateWidgetVisibility();
         QuickPreviewEnabled.IsChecked = settings.QuickPreview;
         UpdateBindingControls();
@@ -109,7 +111,11 @@ public sealed partial class SettingsForm : Window
             else
                 PausePreview();
         };
-        Loaded += (_, _) => ArrangePanels();
+        Loaded += (_, _) =>
+        {
+            ArrangePanels();
+            UiMotion.Reveal(Cockpit, offset: 0, initialOpacity: .88);
+        };
         WorkspaceScroll.SizeChanged += (_, _) => ArrangePanels();
         SizeChanged += (_, _) => ArrangePanels();
         StateChanged += (_, _) =>
@@ -230,13 +236,20 @@ public sealed partial class SettingsForm : Window
 
     private void ShowWumoSettings(bool visible)
     {
-        if (visible || ClipboardChoice.IsChecked == true)
+        bool clipboard = ClipboardChoice.IsChecked == true;
+        if (visible || clipboard)
             StopCapture();
         WumoSettingsPage.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        SaveSettingsButton.Visibility = ClipboardChoice.IsChecked == true ? Visibility.Collapsed : Visibility.Visible;
+        SaveSettingsButton.Visibility = clipboard ? Visibility.Collapsed : Visibility.Visible;
         WumoSettingsButton.Tag = visible ? "Active" : null;
-        SelectedApplicationName.Text = visible ? "Настройки" : ClipboardChoice.IsChecked == true ? ClipboardTitle :
+        SelectedApplicationName.Text = visible ? "Настройки" : clipboard ? ClipboardTitle :
             System.Windows.Automation.AutomationProperties.GetName(PixelThumbsChoice);
+        FrameworkElement page = visible ? WumoSettingsPage : clipboard ? ClipboardPage : PixelThumbsModule;
+        if (activePage != page)
+        {
+            activePage = page;
+            UiMotion.Reveal(page);
+        }
         if (!loading)
             ShowEditStatus();
     }
@@ -244,7 +257,7 @@ public sealed partial class SettingsForm : Window
     private void DisplayClipboardOptions(ClipboardHistoryOptions value)
     {
         clipboardLoading = true;
-        ClipboardSwitch.IsChecked = value.Enabled;
+        ClipboardChoice.WidgetEnabled = value.Enabled;
         ClipboardText.IsChecked = (value.Types & ClipboardKind.Text) != 0;
         ClipboardImages.IsChecked = (value.Types & ClipboardKind.Image) != 0;
         ClipboardFiles.IsChecked = (value.Types & ClipboardKind.Files) != 0;
@@ -263,6 +276,7 @@ public sealed partial class SettingsForm : Window
     }
 
     private void ClipboardOptions_Click(object sender, RoutedEventArgs e) => SaveClipboardOptions();
+    private void ClipboardWidget_Changed(object sender, RoutedPropertyChangedEventArgs<bool> e) => SaveClipboardOptions();
     private void ClipboardMode_Changed(object sender, SelectionChangedEventArgs e) => SaveClipboardOptions();
     private void ClipboardPreview_Click(object sender, RoutedEventArgs e) => ClipboardPreviewRequested?.Invoke();
     private sealed record ClipboardMonitorChoice(string? Device, string Label);
@@ -274,7 +288,7 @@ public sealed partial class SettingsForm : Window
         var previous = savedSettings.ClipboardHistory;
         var next = new ClipboardHistoryOptions
         {
-            Enabled = ClipboardSwitch.IsChecked == true,
+            Enabled = ClipboardChoice.WidgetEnabled,
             Types = (ClipboardText.IsChecked == true ? ClipboardKind.Text : 0) |
                 (ClipboardImages.IsChecked == true ? ClipboardKind.Image : 0) |
                 (ClipboardFiles.IsChecked == true ? ClipboardKind.Files : 0) |
@@ -303,11 +317,11 @@ public sealed partial class SettingsForm : Window
     private void Settings_Click(object sender, RoutedEventArgs e) => SwitchWidgetPage(true);
     private void Thumbnails_Click(object sender, RoutedEventArgs e) => SwitchWidgetPage(false);
 
-    private void ThumbnailsWidget_Changed(object sender, RoutedEventArgs e)
+    private void ThumbnailsWidget_Changed(object sender, RoutedPropertyChangedEventArgs<bool> e)
     {
         if (loading)
             return;
-        settings = settings with { ThumbnailsWidgetEnabled = ThumbnailsWidgetSwitch.IsChecked == true };
+        settings = settings with { ThumbnailsWidgetEnabled = e.NewValue };
         UpdateWidgetVisibility();
         UpdateDirtyState();
         RequestPreview();
@@ -316,9 +330,13 @@ public sealed partial class SettingsForm : Window
     private void UpdateWidgetVisibility()
     {
         bool enabled = settings.ThumbnailsWidgetEnabled;
+        FrameworkElement target = enabled ? WorkspaceArea : WidgetOffNotice;
+        bool showTarget = target.Visibility != Visibility.Visible;
         ModuleNavigation.IsEnabled = enabled;
         WorkspaceArea.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         WidgetOffNotice.Visibility = enabled ? Visibility.Collapsed : Visibility.Visible;
+        if (showTarget && target.IsVisible)
+            UiMotion.Reveal(target);
         if (enabled)
             return;
 
@@ -331,11 +349,15 @@ public sealed partial class SettingsForm : Window
     private void SwitchWidgetPage(bool widgetSettings)
     {
         StopCapture();
+        var target = widgetSettings ? WidgetSettingsScroll : WorkspaceScroll;
+        bool showTarget = target.Visibility != Visibility.Visible;
         WorkspaceScroll.Visibility = widgetSettings ? Visibility.Collapsed : Visibility.Visible;
         WidgetSettingsScroll.Visibility = widgetSettings ? Visibility.Visible : Visibility.Collapsed;
         ThumbnailsTab.Tag = widgetSettings ? null : "Active";
         SettingsTab.Tag = widgetSettings ? "Active" : null;
         ArrangePanels();
+        if (showTarget)
+            UiMotion.Reveal(target);
     }
 
     private void Search_Changed(object sender, TextChangedEventArgs e)
@@ -412,7 +434,13 @@ public sealed partial class SettingsForm : Window
     {
         int count = formats.Count(row => row.Enabled);
         AllFormats.IsChecked = count == 0 ? false : count == formats.Length ? true : null;
-        EnabledCount.Text = count.ToString(CultureInfo.CurrentCulture);
+        string label = count.ToString(CultureInfo.CurrentCulture);
+        if (EnabledCount.Text != label)
+        {
+            EnabledCount.Text = label;
+            if (EnabledCount.IsVisible)
+                UiMotion.Reveal(EnabledCount, offset: 0, initialOpacity: .55);
+        }
     }
 
     private void LoadEditor()
@@ -745,6 +773,11 @@ public sealed partial class SettingsForm : Window
             if (!CanRenderPreview || version != previewVersion || cancellation.IsCancellationRequested)
                 return;
             PreviewImage.Source = image;
+            if (image is not null && version != revealedPreviewVersion)
+            {
+                revealedPreviewVersion = version;
+                UiMotion.Reveal(PreviewImage, offset: 0, initialOpacity: .65);
+            }
             SetPreviewStatus(image is null ? PreviewService.FailureMessage(failure)
                 : path is null ? "Образец с текущими параметрами." : "Стиль для выбранного файла.", image is null ? "Rose" : "Muted");
         }
@@ -969,16 +1002,20 @@ public sealed partial class SettingsForm : Window
 
     private void SetStatus(string message, string color)
     {
+        bool changed = StatusLine.Text != message;
         statusTimer.Stop();
         StatusLine.Text = message;
         StatusLine.ToolTip = message;
         StatusDot.Visibility = message.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         StatusDot.Fill = Ink(color);
+        if (changed && StatusDot.IsVisible)
+            UiMotion.Reveal(StatusDot, offset: 0, initialOpacity: .35);
     }
 
     internal void SetDialogShade(bool visible)
     {
-        DialogShade.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        DialogShade.IsHitTestVisible = visible;
+        UiMotion.SetOpacity(DialogShade, visible ? 1 : 0);
         Cockpit.Effect = visible ? new BlurEffect { Radius = 4 } : null;
     }
 

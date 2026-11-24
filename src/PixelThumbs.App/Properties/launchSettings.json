@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Wumo Hot Reload": {
+      "commandName": "Project",
+      "hotReloadEnabled": true,
+      "environmentVariables": {
+        "XAML_HOT_RELOAD_ACCURACY_OVER_PERF": "1"
+      }
+    }
+  }
+}

@@ -103,7 +103,11 @@ public sealed partial class ColorPicker : System.Windows.Controls.UserControl
         else
         {
             IsValid = false;
-            HexError.Visibility = Visibility.Visible;
+            if (HexError.Visibility != Visibility.Visible)
+            {
+                HexError.Visibility = Visibility.Visible;
+                UiMotion.Reveal(HexError, offset: 0, initialOpacity: .4);
+            }
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
     }
